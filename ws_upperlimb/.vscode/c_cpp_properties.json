@@ -1,0 +1,30 @@
+{
+    "configurations": [
+        {
+            "browse": {
+                "databaseFilename": "${default}",
+                "limitSymbolsToIncludedHeaders": false
+            },
+            "includePath": [
+                "/opt/ros/humble/include/**",
+                "/opt/ros/humble/include/rclcpp/**",
+                "/opt/ros/humble/include/pinocchio/**",
+                "${workspaceFolder}/build/**",
+                "${workspaceFolder}/install/**",
+                "${workspaceFolder}/src/upperlimb_robot/include/upperlimb_robot",
+                "${workspaceFolder}/src/upperlimb_robot/include",
+                "/usr/include/eigen3",
+                "/usr/include/x86_64-linux-gnu/qt5/QtWidgets",
+                "/usr/include/x86_64-linux-gnu/qt5",
+                "/usr/include/x86_64-linux-gnu/qt5/QtCore",
+                "/opt/ros/humble/include"
+            ],
+            "name": "ROS",
+            "intelliSenseMode": "gcc-x64",
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "gnu11",
+            "cppStandard": "c++17"
+        }
+    ],
+    "version": 4
+}

@@ -1,0 +1,6 @@
+//---------------------------//
+2026-10-2 13:46:27:961  Host open all device failed
+2026-10-2 13:46:27:961  HostOpenAllDevice(2,&deviceCount(0)) = -6
+2026-10-2 13:46:27:961  GT_IN_OpenAllDevice(5,2,NULL,&actDeviceCount(-307406966)) = -6
+2026-10-2 13:46:27:961  GTN_OpenAllDevice(5,2,&count) =  -6
+2026-10-2 13:46:27:961  TryLock()=-8.gDev[0]=-1
