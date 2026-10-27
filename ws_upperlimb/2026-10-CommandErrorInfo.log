@@ -4,3 +4,12 @@
 2026-10-2 13:46:27:961  GT_IN_OpenAllDevice(5,2,NULL,&actDeviceCount(-307406966)) = -6
 2026-10-2 13:46:27:961  GTN_OpenAllDevice(5,2,&count) =  -6
 2026-10-2 13:46:27:961  TryLock()=-8.gDev[0]=-1
+//---------------------------//
+2026-10-2 15:54:51:817  The g_pSlaveListExV1 is 0
+2026-10-2 15:54:51:817  GT_IN_GetEcatSlaveInfo(-1,&slaveinfo) = 2
+//---------------------------//
+2026-10-2 15:56:3:836  The g_pSlaveListExV1 is 0
+2026-10-2 15:56:3:836  GT_IN_GetEcatSlaveInfo(-1,&slaveinfo) = 2
+//---------------------------//
+2026-10-2 15:58:56:84  The g_pSlaveListExV1 is 0
+2026-10-2 15:58:56:84  GT_IN_GetEcatSlaveInfo(-1,&slaveinfo) = 2
