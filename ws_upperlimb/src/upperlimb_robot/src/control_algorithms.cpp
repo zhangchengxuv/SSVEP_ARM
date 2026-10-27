@@ -24,6 +24,7 @@
 #include <pinocchio/algorithm/rnea.hpp>
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/jacobian.hpp>
+#include <pinocchio/algorithm/kinematics.hpp>
 #include <pinocchio/spatial/force.hpp>
 
 namespace upperlimb_robot
@@ -131,62 +132,81 @@ namespace upperlimb_robot
       {0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40},
       {0.06, 0.06, 0.03, 0.03, 0.03, 0.03, 0.03}};
 
-  // ===================== 全局统一六维力传感器交互反馈增益 =====================
-  // 与重力、摩擦补偿参数一样，四个增益在此统一配置。
-  // 用于左、右和双臂零力模式的六维力反馈。
-  // 该参数不是传感器标定系数，不修改原始测量及零偏。
-  // 对每个传感器的六维力/力矩采用同一无量纲增益；1.00 = 保持原行为。
-  // 修改后须重新编译；不允许负值，避免误反转交互力方向。
-  constexpr double LEFT_ARM_FORCE_FEEDBACK_GAIN = 1.00;   // 左大臂传感器
-  constexpr double LEFT_HAND_FORCE_FEEDBACK_GAIN = 1.00;  // 左手部传感器
-  constexpr double RIGHT_ARM_FORCE_FEEDBACK_GAIN = 1.00;  // 右大臂传感器
-  constexpr double RIGHT_HAND_FORCE_FEEDBACK_GAIN = 1.00; // 右手部传感器
+  // ===================== 全局统一大臂传感器六维分量增益 =====================
+  // 左右大臂传感器共用以下六个参数；手部传感器保持原始反馈，不应用这些增益。
+  // 增益按 Pinocchio 根坐标系的 X/Y/Z 轴定义，而不是固定按传感器局部轴定义。
+  // 每个控制周期利用 URDF 中传感器 frame 的实际旋转，将力/力矩旋至根坐标系缩放，
+  // 再旋回传感器局部坐标系，以匹配后续 pinocchio::LOCAL 雅可比映射。
+  // 前提：URDF 中的大臂传感器 frame 姿态与实物安装方向一致。
+  // 1.00 = 保持原行为；仅允许非负值，不把增益当作传感器标定或零偏参数。
+  constexpr double ARM_FORCE_GAIN_WORLD_X = 1.20;
+  constexpr double ARM_FORCE_GAIN_WORLD_Y = 1.00;
+  constexpr double ARM_FORCE_GAIN_WORLD_Z = 1.00;
+  constexpr double ARM_MOMENT_GAIN_WORLD_X = 1.00;
+  constexpr double ARM_MOMENT_GAIN_WORLD_Y = 1.00;
+  constexpr double ARM_MOMENT_GAIN_WORLD_Z = 1.00;
 
-  static_assert(LEFT_ARM_FORCE_FEEDBACK_GAIN >= 0.0 &&
-                    LEFT_HAND_FORCE_FEEDBACK_GAIN >= 0.0 &&
-                    RIGHT_ARM_FORCE_FEEDBACK_GAIN >= 0.0 &&
-                    RIGHT_HAND_FORCE_FEEDBACK_GAIN >= 0.0,
-                "Force-feedback gains must be nonnegative");
+  static_assert(
+      ARM_FORCE_GAIN_WORLD_X >= 0.0 &&
+          ARM_FORCE_GAIN_WORLD_Y >= 0.0 &&
+          ARM_FORCE_GAIN_WORLD_Z >= 0.0 &&
+          ARM_MOMENT_GAIN_WORLD_X >= 0.0 &&
+          ARM_MOMENT_GAIN_WORLD_Y >= 0.0 &&
+          ARM_MOMENT_GAIN_WORLD_Z >= 0.0,
+      "Arm sensor feedback gains must be nonnegative");
 
   namespace
   {
 
-    // 将六维力（N）与力矩（Nm）分别按同一传感器增益缩放。
-    // 调用位置必须在原有零偏、符号和死区处理后、原有限幅前。
-    inline void applySixComponentForceFeedbackGain(
+    // 在传感器局部坐标中输入六维力旋量：
+    // 1) 通过当前 URDF frame 旋转到 Pinocchio 根坐标系；
+    // 2) 分别对根坐标系 XYZ 方向的力与力矩应用共享增益；
+    // 3) 旋回传感器局部坐标系，供 pinocchio::LOCAL 的 J^T*w 使用。
+    //
+    // 力和力矩均只旋转坐标分量，不改变力矩参考点。
+    // 左右传感器的局部轴安装方向存在符号差异；使用各自实际 frame 旋转，
+    // 避免用固定的 Fx/Fy/Fz 置换关系错误处理机械臂运动中的姿态变化。
+    inline void applyArmSensorWorldAxisGain(
         double &fx, double &fy, double &fz,
         double &mx, double &my, double &mz,
-        double gain)
+        const Eigen::Matrix3d &world_R_sensor)
     {
-      fx *= gain;
-      fy *= gain;
-      fz *= gain;
-      mx *= gain;
-      my *= gain;
-      mz *= gain;
+      const Eigen::Vector3d force_sensor(fx, fy, fz);
+      const Eigen::Vector3d moment_sensor(mx, my, mz);
+
+      const Eigen::Vector3d force_world = world_R_sensor * force_sensor;
+      const Eigen::Vector3d moment_world = world_R_sensor * moment_sensor;
+
+      const Eigen::Vector3d force_world_scaled(
+          ARM_FORCE_GAIN_WORLD_X * force_world.x(),
+          ARM_FORCE_GAIN_WORLD_Y * force_world.y(),
+          ARM_FORCE_GAIN_WORLD_Z * force_world.z());
+
+      const Eigen::Vector3d moment_world_scaled(
+          ARM_MOMENT_GAIN_WORLD_X * moment_world.x(),
+          ARM_MOMENT_GAIN_WORLD_Y * moment_world.y(),
+          ARM_MOMENT_GAIN_WORLD_Z * moment_world.z());
+
+      const Eigen::Vector3d force_sensor_scaled =
+          world_R_sensor.transpose() * force_world_scaled;
+      const Eigen::Vector3d moment_sensor_scaled =
+          world_R_sensor.transpose() * moment_world_scaled;
+
+      fx = force_sensor_scaled.x();
+      fy = force_sensor_scaled.y();
+      fz = force_sensor_scaled.z();
+      mx = moment_sensor_scaled.x();
+      my = moment_sensor_scaled.y();
+      mz = moment_sensor_scaled.z();
     }
 
-    // 同一操作适配各双臂算法中各自定义的 Wrench6 局部结构。
+    // 适配双臂算法中使用的 Wrench6 局部结构。
     template <typename Wrench>
-    inline void applyForceFeedbackGain(Wrench &w, double gain)
+    inline void applyArmSensorWorldAxisGain(
+        Wrench &w, const Eigen::Matrix3d &world_R_sensor)
     {
-      applySixComponentForceFeedbackGain(
-          w.fx, w.fy, w.fz, w.mx, w.my, w.mz, gain);
-    }
-
-    // 在已有真实传感器预处理后缩放时，重新限制原来的力/力矩幅值。
-    template <typename Wrench>
-    inline void applyForceFeedbackGainWithLimit(
-        Wrench &w, double gain, double force_limit, double moment_limit)
-    {
-      applyForceFeedbackGain(w, gain);
-      // C++14 compatible; avoid relying on std::clamp (C++17).
-      w.fx = std::max(-force_limit, std::min(force_limit, w.fx));
-      w.fy = std::max(-force_limit, std::min(force_limit, w.fy));
-      w.fz = std::max(-force_limit, std::min(force_limit, w.fz));
-      w.mx = std::max(-moment_limit, std::min(moment_limit, w.mx));
-      w.my = std::max(-moment_limit, std::min(moment_limit, w.my));
-      w.mz = std::max(-moment_limit, std::min(moment_limit, w.mz));
+      applyArmSensorWorldAxisGain(
+          w.fx, w.fy, w.fz, w.mx, w.my, w.mz, world_R_sensor);
     }
 
     // ===================== 编码器参数 =====================
@@ -775,6 +795,10 @@ namespace upperlimb_robot
     v(5) = state.velocity[IDX_J6] * DEG2RAD;
     v(6) = state.velocity[IDX_J7] * DEG2RAD;
 
+    // 更新当前关节姿态下的传感器 frame 旋转，用于按根坐标系 XYZ 方向应用增益。
+    pinocchio::forwardKinematics(model, *data, q);
+    pinocchio::updateFramePlacements(model, *data);
+
     // ===================== 读取并去偏两个六维力传感器 =====================
     //
     // 左臂：
@@ -859,14 +883,12 @@ namespace upperlimb_robot
     my_hand = apply_deadzone(my_hand, torque_deadzone);
     mz_hand = apply_deadzone(mz_hand, torque_deadzone);
 
-    // ===================== 全局统一交互力反馈增益 =====================
-    // 真实传感器数据已经去零偏/校正符号/过死区；在原限幅前缩放。
-    applySixComponentForceFeedbackGain(
+    // ===================== 左大臂传感器根坐标系六维增益 =====================
+    // 只调整大臂传感器；手部传感器维持原始反馈。
+    // 传感器已完成去偏、符号修正和死区处理，随后仍执行原有限幅。
+    applyArmSensorWorldAxisGain(
         fx_arm, fy_arm, fz_arm, mx_arm, my_arm, mz_arm,
-        LEFT_ARM_FORCE_FEEDBACK_GAIN);
-    applySixComponentForceFeedbackGain(
-        fx_hand, fy_hand, fz_hand, mx_hand, my_hand, mz_hand,
-        LEFT_HAND_FORCE_FEEDBACK_GAIN);
+        data->oMf[frame_id_arm].rotation());
 
     // ===================== 限幅 =====================
     //
@@ -1216,6 +1238,10 @@ namespace upperlimb_robot
     v(5) = state.velocity[IDX_J16] * DEG2RAD;
     v(6) = state.velocity[IDX_J17] * DEG2RAD;
 
+    // 更新当前关节姿态下的传感器 frame 旋转，用于按根坐标系 XYZ 方向应用增益。
+    pinocchio::forwardKinematics(model, *data, q);
+    pinocchio::updateFramePlacements(model, *data);
+
     // ===================== 读取并去偏两个六维力传感器 =====================
     //
     // 右臂：
@@ -1299,14 +1325,12 @@ namespace upperlimb_robot
     my_hand = apply_deadzone(my_hand, torque_deadzone);
     mz_hand = apply_deadzone(mz_hand, torque_deadzone);
 
-    // ===================== 全局统一交互力反馈增益 =====================
-    // 真实传感器数据已经去零偏/校正符号/过死区；在原限幅前缩放。
-    applySixComponentForceFeedbackGain(
+    // ===================== 右大臂传感器根坐标系六维增益 =====================
+    // 只调整大臂传感器；手部传感器维持原始反馈。
+    // 传感器已完成去偏、符号修正和死区处理，随后仍执行原有限幅。
+    applyArmSensorWorldAxisGain(
         fx_arm, fy_arm, fz_arm, mx_arm, my_arm, mz_arm,
-        RIGHT_ARM_FORCE_FEEDBACK_GAIN);
-    applySixComponentForceFeedbackGain(
-        fx_hand, fy_hand, fz_hand, mx_hand, my_hand, mz_hand,
-        RIGHT_HAND_FORCE_FEEDBACK_GAIN);
+        data->oMf[frame_id_arm].rotation());
 
     // ===================== 限幅 =====================
     //
@@ -1730,6 +1754,10 @@ namespace upperlimb_robot
       v(right_v_id[i]) = state.velocity[right_ctrl_id[i]] * DEG2RAD;
     }
 
+    // 更新当前双臂姿态下的传感器 frame 旋转，保证共享增益始终沿根坐标系 XYZ 定义。
+    pinocchio::forwardKinematics(model, *data, q);
+    pinocchio::updateFramePlacements(model, *data);
+
     // ===================== Wrench 读取、符号修正、死区、限幅 =====================
     struct Wrench6
     {
@@ -1807,12 +1835,13 @@ namespace upperlimb_robot
     apply_wrench_deadzone(right_arm);
     apply_wrench_deadzone(right_hand);
 
-    // ===================== 全局统一交互力反馈增益 =====================
-    // 本模式原有流程不变：去偏 -> 符号 -> 死区 -> 全局增益 -> 80N/8Nm限幅。
-    applyForceFeedbackGain(left_arm, LEFT_ARM_FORCE_FEEDBACK_GAIN);
-    applyForceFeedbackGain(left_hand, LEFT_HAND_FORCE_FEEDBACK_GAIN);
-    applyForceFeedbackGain(right_arm, RIGHT_ARM_FORCE_FEEDBACK_GAIN);
-    applyForceFeedbackGain(right_hand, RIGHT_HAND_FORCE_FEEDBACK_GAIN);
+    // ===================== 左右大臂传感器根坐标系六维增益 =====================
+    // 左右大臂共用同一组世界/根坐标系 XYZ 增益；手部传感器保持原始反馈。
+    // 缩放后仍执行原有 80N/8Nm 限幅。
+    applyArmSensorWorldAxisGain(
+        left_arm, data->oMf[left_frame_id_arm].rotation());
+    applyArmSensorWorldAxisGain(
+        right_arm, data->oMf[right_frame_id_arm].rotation());
 
     const double force_limit = 80.0; // N
     const double moment_limit = 8.0; // Nm
